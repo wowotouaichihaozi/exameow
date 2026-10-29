@@ -1,184 +1,266 @@
-import { ref } from 'vue'
+import { nextTick, ref } from 'vue'
+
+type Direction = 'next' | 'prev'
 
 export interface SwipeNavOptions {
   threshold?: number
+  canNavigate?: (direction: Direction) => boolean
+  disabled?: () => boolean
 }
 
 function isGestureBlockedEl(target: EventTarget | null): boolean {
-  if (!target || !(target instanceof HTMLElement)) return false
-  const tag = target.tagName
-  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return true
-  return target.closest('input, textarea, select, a') !== null
+  return target instanceof Element
+    && target.closest('input, textarea, select, a, button, [contenteditable="true"]') !== null
 }
 
+/** A direction-locked pager: follow the finger, preview the neighbor, then settle. */
 export function useSwipeNavigation(
-  onNavigate: (dir: 'next' | 'prev') => void,
-  onCommit: (direction: 'next' | 'prev', offset: number, width: number) => void,
+  onNavigate: (direction: Direction) => void,
   options: SwipeNavOptions = {},
 ) {
-  const { threshold = 60 } = options
-
   const slideOffset = ref(0)
-  const animating = ref(false)
+  const transitioning = ref(false)
+  const dragging = ref(false)
+  const settling = ref(false)
 
-  let isDragging = false
+  let activeElement: HTMLElement | null = null
+  let pointerId: number | null = null
+  let touchId: number | null = null
   let startX = 0
   let startY = 0
-  let elWidth = 0
+  let lastX = 0
+  let lastTime = 0
+  let velocity = 0
+  let axis: 'horizontal' | 'vertical' | null = null
   let suppressClick = false
+  let settleTimer: ReturnType<typeof setTimeout> | null = null
+  let clickTimer: ReturnType<typeof setTimeout> | null = null
 
-  function commit(direction: 'next' | 'prev', offset: number) {
-    if (animating.value) return
-    animating.value = true
-    onCommit(direction, offset, elWidth)
-  }
+  const canNavigate = (direction: Direction) => options.canNavigate?.(direction) ?? true
+  const isDisabled = () => options.disabled?.() ?? false
+  const pageWidth = () => Math.max(activeElement?.clientWidth ?? 0, 1)
 
-  // ── Keyboard ──
-  function handleKeydown(e: KeyboardEvent) {
-    if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLSelectElement) return
-    if (animating.value) return
-
-    if (e.key === 'ArrowLeft') {
-      e.preventDefault()
-      onNavigate('prev')
-      commit('prev', 0)
-    } else if (e.key === 'ArrowRight') {
-      e.preventDefault()
-      onNavigate('next')
-      commit('next', 0)
+  function releasePointer() {
+    const releasedId = pointerId
+    pointerId = null
+    touchId = null
+    axis = null
+    dragging.value = false
+    if (releasedId !== null && activeElement?.hasPointerCapture(releasedId)) {
+      activeElement.releasePointerCapture(releasedId)
     }
   }
 
-  // ── Touch ──
-  function handleTouchStart(e: TouchEvent) {
-    if (animating.value || isGestureBlockedEl(e.target) || e.touches.length !== 1) return
-    startX = e.touches[0]!.clientX
-    startY = e.touches[0]!.clientY
-    isDragging = true
-    suppressClick = false
+  function cancel() {
+    if (settleTimer !== null) clearTimeout(settleTimer)
+    if (clickTimer !== null) clearTimeout(clickTimer)
+    settleTimer = null
+    clickTimer = null
+    releasePointer()
+    transitioning.value = false
+    settling.value = false
     slideOffset.value = 0
+    suppressClick = false
   }
 
-  function handleTouchMove(e: TouchEvent) {
-    if (!isDragging || e.touches.length !== 1) return
-    const totalDx = e.touches[0]!.clientX - startX
-    const totalDy = Math.abs(e.touches[0]!.clientY - startY)
-    if (Math.abs(totalDx) > Math.abs(totalDy) && Math.abs(totalDx) > 10) {
-      e.preventDefault()
-      suppressClick = true
-    }
-    slideOffset.value = totalDx
-  }
-
-  function handleTouchEnd(e: TouchEvent) {
-    if (!isDragging) return
-    isDragging = false
-    const totalDx = (e.changedTouches[0]?.clientX ?? startX) - startX
-    const totalDy = Math.abs((e.changedTouches[0]?.clientY ?? startY) - startY)
-
-    if (Math.abs(totalDx) > threshold && Math.abs(totalDx) > totalDy) {
-      if (totalDx < 0) {
-        onNavigate('next')
-        commit('next', totalDx)
-      } else {
-        onNavigate('prev')
-        commit('prev', totalDx)
-      }
-    } else {
+  function resetClickSuppression() {
+    if (clickTimer !== null) clearTimeout(clickTimer)
+    clickTimer = setTimeout(() => {
       suppressClick = false
+      clickTimer = null
+    }, 0)
+  }
+
+  function settle(direction?: Direction) {
+    releasePointer()
+    transitioning.value = true
+    settling.value = true
+    slideOffset.value = direction ? (direction === 'next' ? -pageWidth() : pageWidth()) : 0
+    const duration = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 0 : 200
+    settleTimer = setTimeout(async () => {
+      settleTimer = null
+      if (direction && !isDisabled() && canNavigate(direction)) onNavigate(direction)
+      // Render the new active page before resetting the track, so it never flashes back.
+      await nextTick()
+      transitioning.value = false
       slideOffset.value = 0
+      settling.value = false
+    }, duration)
+    resetClickSuppression()
+  }
+
+  function startGesture(x: number, y: number, time: number) {
+    startX = lastX = x
+    startY = y
+    lastTime = time
+    velocity = 0
+    axis = null
+    suppressClick = false
+    transitioning.value = false
+  }
+
+  function moveGesture(x: number, y: number, time: number): boolean {
+    if (isDisabled()) {
+      cancel()
+      return false
+    }
+    const dx = x - startX
+    const dy = y - startY
+    if (!axis && Math.hypot(dx, dy) >= 8) {
+      axis = Math.abs(dx) > Math.abs(dy) * 1.3 ? 'horizontal' : 'vertical'
+      if (axis === 'horizontal') {
+        dragging.value = true
+        if (pointerId !== null) activeElement?.setPointerCapture(pointerId)
+      }
+    }
+    if (axis !== 'horizontal') return false
+
+    suppressClick = true
+    const elapsed = time - lastTime
+    if (elapsed > 0) velocity = (x - lastX) / elapsed
+    lastX = x
+    lastTime = time
+    const direction = dx < 0 ? 'next' : 'prev'
+    // Normal pages follow 1:1. Resistance is only used at the ends of the bank.
+    slideOffset.value = canNavigate(direction)
+      ? Math.max(-pageWidth(), Math.min(pageWidth(), dx))
+      : Math.sign(dx) * Math.min(56, Math.abs(dx) * 0.22)
+    return true
+  }
+
+  function finishGesture(x: number, time: number) {
+    if (axis !== 'horizontal') {
+      releasePointer()
+      return
+    }
+    const dx = x - startX
+    const direction = dx < 0 ? 'next' : 'prev'
+    const distance = Math.abs(dx)
+    const threshold = options.threshold ?? Math.max(56, Math.min(110, pageWidth() * 0.25))
+    const recentVelocity = time - lastTime < 100 ? velocity : 0
+    const flick = distance >= 36 && Math.abs(recentVelocity) >= 0.45
+      && Math.sign(recentVelocity) === Math.sign(dx)
+    settle(!isDisabled() && canNavigate(direction) && (distance >= threshold || flick)
+      ? direction
+      : undefined)
+  }
+
+  function handlePointerDown(event: PointerEvent) {
+    // Touch has its own non-passive move listener. A WebView's pointercancel
+    // must not terminate the still-active touch stream.
+    if (event.pointerType === 'touch' || !event.isPrimary || event.button !== 0
+      || pointerId !== null || touchId !== null || settling.value
+      || isDisabled() || isGestureBlockedEl(event.target)) return
+    pointerId = event.pointerId
+    startGesture(event.clientX, event.clientY, event.timeStamp)
+  }
+
+  function handlePointerMove(event: PointerEvent) {
+    if (pointerId !== event.pointerId) return
+    if (moveGesture(event.clientX, event.clientY, event.timeStamp)) event.preventDefault()
+  }
+
+  function handlePointerUp(event: PointerEvent) {
+    if (pointerId !== event.pointerId) return
+    finishGesture(event.clientX, event.timeStamp)
+  }
+
+  function handlePointerCancel(event: PointerEvent) {
+    if (pointerId !== event.pointerId) return
+    if (axis === 'horizontal') settle()
+    else releasePointer()
+  }
+
+  function handleTouchStart(event: TouchEvent) {
+    if (event.touches.length !== 1) {
+      if (touchId !== null) cancel()
+      return
+    }
+    if (pointerId !== null || touchId !== null || settling.value
+      || isDisabled() || isGestureBlockedEl(event.target)) return
+    const touch = event.touches[0]!
+    touchId = touch.identifier
+    startGesture(touch.clientX, touch.clientY, event.timeStamp)
+  }
+
+  function handleTouchMove(event: TouchEvent) {
+    if (touchId === null) return
+    if (event.touches.length !== 1) {
+      cancel()
+      return
+    }
+    const touch = Array.from(event.touches).find(item => item.identifier === touchId)
+    if (!touch) return
+    if (moveGesture(touch.clientX, touch.clientY, event.timeStamp) && event.cancelable) {
+      // Once horizontal intent is locked, keep scrolling from taking over.
+      // Vertical gestures remain native, as do multi-finger zoom gestures.
+      event.preventDefault()
     }
   }
 
-  // Suppress the click fired after a swipe on interactive elements (option buttons).
-  // Registered in capture phase so it intercepts before the button's own click handler.
-  function handleClickCapture(e: MouseEvent) {
+  function handleTouchEnd(event: TouchEvent) {
+    if (touchId === null) return
+    const touch = Array.from(event.changedTouches).find(item => item.identifier === touchId)
+    if (!touch) return
+    if (axis === 'horizontal' && event.cancelable) event.preventDefault()
+    finishGesture(touch.clientX, event.timeStamp)
+  }
+
+  function handleTouchCancel() {
+    if (touchId === null) return
+    if (axis === 'horizontal') settle()
+    else releasePointer()
+  }
+
+  function handleClickCapture(event: MouseEvent) {
     if (!suppressClick) return
-    e.preventDefault()
-    e.stopPropagation()
-    suppressClick = false
+    event.preventDefault()
+    event.stopPropagation()
   }
 
-  // ── Mouse drag ──
-  function handleMouseDown(e: MouseEvent) {
-    if (animating.value || isGestureBlockedEl(e.target)) return
-    startX = e.clientX
-    startY = e.clientY
-    isDragging = true
-    suppressClick = false
-    slideOffset.value = 0
-    document.addEventListener('mousemove', handleMouseMove)
-    document.addEventListener('mouseup', handleMouseUp)
+  function handleKeydown(event: KeyboardEvent) {
+    if (isDisabled() || settling.value || isGestureBlockedEl(event.target)) return
+    const direction = event.key === 'ArrowRight' ? 'next' : event.key === 'ArrowLeft' ? 'prev' : null
+    if (!direction || !canNavigate(direction)) return
+    event.preventDefault()
+    onNavigate(direction)
   }
 
-  function handleMouseMove(e: MouseEvent) {
-    if (!isDragging) return
-    const totalDx = e.clientX - startX
-    const totalDy = Math.abs(e.clientY - startY)
-    if (Math.abs(totalDx) > Math.abs(totalDy) && Math.abs(totalDx) > 10) {
-      suppressClick = true
-    }
-    slideOffset.value = totalDx
-  }
-
-  function handleMouseUp(e: MouseEvent) {
-    document.removeEventListener('mousemove', handleMouseMove)
-    document.removeEventListener('mouseup', handleMouseUp)
-    if (!isDragging) return
-    isDragging = false
-    const totalDx = e.clientX - startX
-    const totalDy = Math.abs(e.clientY - startY)
-
-    if (Math.abs(totalDx) > threshold && Math.abs(totalDx) > totalDy) {
-      if (totalDx < 0) {
-        onNavigate('next')
-        commit('next', totalDx)
-      } else {
-        onNavigate('prev')
-        commit('prev', totalDx)
-      }
-    } else {
-      suppressClick = false
-      slideOffset.value = 0
-    }
-  }
-
-  // ── Attach / Detach ──
-  function attach(el: HTMLElement) {
-    elWidth = el.offsetWidth
+  function attach(element: HTMLElement) {
+    detach()
+    activeElement = element
+    element.style.touchAction = 'pan-y pinch-zoom'
+    element.addEventListener('pointerdown', handlePointerDown)
+    element.addEventListener('pointermove', handlePointerMove)
+    element.addEventListener('pointerup', handlePointerUp)
+    element.addEventListener('pointercancel', handlePointerCancel)
+    element.addEventListener('lostpointercapture', handlePointerCancel)
+    element.addEventListener('touchstart', handleTouchStart, { passive: true })
+    element.addEventListener('touchmove', handleTouchMove, { passive: false })
+    element.addEventListener('touchend', handleTouchEnd, { passive: false })
+    element.addEventListener('touchcancel', handleTouchCancel)
+    element.addEventListener('click', handleClickCapture, true)
     window.addEventListener('keydown', handleKeydown)
-    el.addEventListener('touchstart', handleTouchStart, { passive: false })
-    el.addEventListener('touchmove', handleTouchMove, { passive: false })
-    el.addEventListener('touchend', handleTouchEnd)
-    el.addEventListener('mousedown', handleMouseDown)
-    el.addEventListener('click', handleClickCapture, true)
   }
 
-  function detach(el: HTMLElement) {
+  function detach(element?: HTMLElement) {
+    const target = element ?? activeElement
+    cancel()
+    if (!target) return
+    target.removeEventListener('pointerdown', handlePointerDown)
+    target.removeEventListener('pointermove', handlePointerMove)
+    target.removeEventListener('pointerup', handlePointerUp)
+    target.removeEventListener('pointercancel', handlePointerCancel)
+    target.removeEventListener('lostpointercapture', handlePointerCancel)
+    target.removeEventListener('touchstart', handleTouchStart)
+    target.removeEventListener('touchmove', handleTouchMove)
+    target.removeEventListener('touchend', handleTouchEnd)
+    target.removeEventListener('touchcancel', handleTouchCancel)
+    target.removeEventListener('click', handleClickCapture, true)
+    target.style.touchAction = ''
     window.removeEventListener('keydown', handleKeydown)
-    el.removeEventListener('touchstart', handleTouchStart)
-    el.removeEventListener('touchmove', handleTouchMove)
-    el.removeEventListener('touchend', handleTouchEnd)
-    el.removeEventListener('mousedown', handleMouseDown)
-    el.removeEventListener('click', handleClickCapture, true)
-    document.removeEventListener('mousemove', handleMouseMove)
-    document.removeEventListener('mouseup', handleMouseUp)
-    isDragging = false
-    suppressClick = false
-    slideOffset.value = 0
+    if (activeElement === target) activeElement = null
   }
 
-  function finishAnimation() {
-    animating.value = false
-    slideOffset.value = 0
-  }
-
-  return {
-    slideOffset,
-    animating,
-    triggerSlide: commit,
-    finishAnimation,
-    attach,
-    detach,
-  }
+  return { slideOffset, transitioning, dragging, settling, cancel, attach, detach }
 }

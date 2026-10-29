@@ -27,3 +27,9 @@ release.keystore
 .agents/
 skills-lock.json
 scripts/cf-seo/
+
+# Local Android toolchains, verification artifacts and install packages
+/.tools/
+/.build-check/
+*.apk
+*.aab

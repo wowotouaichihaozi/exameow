@@ -1,11 +1,24 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { usePracticeStore } from '@/stores/practice'
 import { useI18nStore } from '@/stores/i18n'
 import { XMarkIcon, CheckIcon, MinusIcon } from '@heroicons/vue/24/outline'
 
 const practiceStore = usePracticeStore()
 const i18n = useI18nStore()
+const numberList = ref<HTMLElement | null>(null)
+
+async function scrollToCurrent() {
+  await nextTick()
+  const viewport = numberList.value
+  const current = viewport?.querySelector<HTMLElement>('[aria-current="true"]')
+  if (!viewport || !current) return
+  // Only scroll the number list; the dialog header and the practice page stay put.
+  viewport.scrollTop = current.offsetTop - (viewport.clientHeight - current.offsetHeight) / 2
+}
+
+onMounted(scrollToCurrent)
+watch(() => practiceStore.session?.currentIndex, scrollToCurrent, { flush: 'post' })
 
 const emit = defineEmits<{
   (e: 'close'): void
@@ -40,8 +53,8 @@ function jumpTo(index: number) {
 
 <template>
   <div class="scrim flex items-center justify-center p-4" @click.self="emit('close')">
-    <div class="card-elevated w-full max-w-md max-h-[85vh] overflow-y-auto p-5">
-      <div class="flex items-center justify-between mb-4">
+    <div class="card-elevated flex flex-col w-full max-w-md max-h-[85vh] overflow-hidden p-5" role="dialog" aria-modal="true" :aria-label="i18n.t('practiceAnswerSheet')">
+      <div class="flex shrink-0 items-center justify-between mb-4">
         <h3 class="text-title-sm" :style="{ color: 'rgb(var(--md-on-surface))' }">
            {{ i18n.t('practiceAnswerSheet') }}
           <span class="text-body-sm font-normal ml-1" :style="{ color: 'rgb(var(--md-on-surface-variant))' }">
@@ -54,7 +67,7 @@ function jumpTo(index: number) {
       </div>
 
       <!-- Stats row -->
-      <div class="flex items-center gap-4 mb-4 text-sm">
+      <div class="flex shrink-0 items-center gap-4 mb-4 text-sm">
         <div class="flex items-center gap-1.5">
           <div class="w-3 h-3 rounded-sm" :style="{ backgroundColor: 'rgb(var(--md-primary))' }" />
           <span :style="{ color: 'rgb(var(--md-on-surface-variant))' }">{{ i18n.t('practiceCorrect') }} {{ stats.correct }}</span>
@@ -70,10 +83,12 @@ function jumpTo(index: number) {
       </div>
 
       <!-- Number grid -->
-      <div class="grid grid-cols-5 sm:grid-cols-6 gap-2">
+      <div ref="numberList" class="min-h-0 overflow-y-auto overscroll-contain p-1 -m-1">
+      <div class="relative grid grid-cols-5 sm:grid-cols-6 gap-2">
         <button
           v-for="q in questions"
           :key="q.index"
+          :aria-current="q.isCurrent ? 'true' : undefined"
           class="w-full aspect-square rounded-xl flex flex-col items-center justify-center text-xs font-bold transition-all duration-150 border-2"
           :class="q.isCurrent ? 'ring-2 ring-offset-1' : ''"
           :style="{
@@ -116,6 +131,7 @@ function jumpTo(index: number) {
           </template>
           {{ q.index + 1 }}
         </button>
+      </div>
       </div>
     </div>
   </div>

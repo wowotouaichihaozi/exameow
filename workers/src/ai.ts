@@ -197,6 +197,7 @@ function mapMessagesWithExtra(
     }
     if (message.tool_calls) item.tool_calls = message.tool_calls
     if (message.tool_call_id) item.tool_call_id = message.tool_call_id
+    if (message.reasoning_content !== undefined) item.reasoning_content = message.reasoning_content
     return item
   })
   const trimmed = extra?.trim().slice(0, MAX_PROMPT_CHARS)
@@ -213,6 +214,7 @@ function mapMessagesWithExtra(
 
 interface ParsedCfLine {
   text: string
+  reasoning?: string
   toolCalls: any[]
 }
 
@@ -240,7 +242,9 @@ function parseCfLine(line: string): ParsedCfLine {
         ? parsed.choices[0].message.tool_calls
         : []),
     ]
-    return { text, toolCalls }
+    const chunk = parsed.choices?.[0]?.delta ?? parsed.choices?.[0]?.message ?? parsed
+    const reasoning = chunk.reasoning_content ?? chunk.reasoning
+    return { text, toolCalls, reasoning: typeof reasoning === 'string' ? reasoning : undefined }
   } catch {
     return { text: '', toolCalls: [] }
   }
@@ -289,12 +293,14 @@ function normalizeStream(input: ReadableStream): ReadableStream<Uint8Array> {
           const lines = buffer.split('\n')
           buffer = lines.pop() ?? ''
           for (const line of lines) {
-            const text = extractCfDelta(line)
-            if (text) controller.enqueue(sseFrame({ type: 'delta', text }))
+            const parsed = parseCfLine(line)
+            if (parsed.reasoning) controller.enqueue(sseFrame({ type: 'reasoning', text: parsed.reasoning }))
+            if (parsed.text) controller.enqueue(sseFrame({ type: 'delta', text: parsed.text }))
           }
         }
-        const tail = extractCfDelta(buffer)
-        if (tail) controller.enqueue(sseFrame({ type: 'delta', text: tail }))
+        const tail = parseCfLine(buffer)
+        if (tail.reasoning) controller.enqueue(sseFrame({ type: 'reasoning', text: tail.reasoning }))
+        if (tail.text) controller.enqueue(sseFrame({ type: 'delta', text: tail.text }))
         controller.enqueue(sseFrame({ type: 'done' }))
         controller.close()
       } catch (e) {
@@ -372,6 +378,7 @@ export async function aiChatRound(ai: Ai, input: AIChatStreamInput): Promise<AIC
         const acc = new Map<number, ToolCall>()
         const emit = (line: string) => {
           const parsed = parseCfLine(line)
+          if (parsed.reasoning) controller.enqueue(sseFrame({ type: 'reasoning', text: parsed.reasoning }))
           if (parsed.text) controller.enqueue(sseFrame({ type: 'delta', text: parsed.text }))
           parsed.toolCalls.forEach((raw, index) => mergeToolCall(acc, raw, index))
         }

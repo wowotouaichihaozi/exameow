@@ -5,6 +5,7 @@ import { useI18nStore } from '@/stores/i18n'
 import type { Question, PracticeMode } from '@exameow/shared'
 import QuestionImages from '@/components/practice/QuestionImages.vue'
 import { mediaIds } from '@/utils/questionMedia'
+import { normalizeTrueFalseAnswer } from '@/utils/answerNormalization'
 import {
   CheckCircleIcon,
   XCircleIcon,
@@ -53,6 +54,14 @@ function goConfig() {
 
 const answerRevealed = ref(false)
 
+// In the special diagram-answer bank, the XLSX stem image is an answer image.
+// Keep it hidden until the learner submits or explicitly reveals the answer.
+const isDiagramAnswer = computed(
+  () =>
+    props.question.type === 'short_answer' &&
+    props.question.stem.startsWith('【画图简答·'),
+)
+
 const isChoiceType = computed(() => {
   return props.question.type === 'single_choice' ||
     props.question.type === 'multi_choice' ||
@@ -75,10 +84,7 @@ const optionLabels = 'ABCDEFGH'.split('')
 
 const correctAnswerSet = computed(() => {
   if (props.question.type === 'true_false') {
-    const a = props.question.answer.trim()
-    const isTrue = ['A', '√', '对', '正确', 'TRUE', 'T', '是', 'YES', 'Y', '1'].some(
-      v => a.toUpperCase() === v.toUpperCase() || a.includes(v)
-    )
+    const isTrue = normalizeTrueFalseAnswer(props.question.answer) === 'TRUE'
     return new Set<string>(isTrue ? ['A'] : ['B'])
   }
   return new Set(props.question.answer.trim().toUpperCase().replace(/[^A-H]/g, '').split(''))
@@ -292,7 +298,7 @@ function getBadgeStyle(opt: string) {
       {{ question.stem }}
     </div>
 
-    <QuestionImages :ids="mediaIds(question.media, 'stem')" />
+    <QuestionImages v-if="!isDiagramAnswer" :ids="mediaIds(question.media, 'stem')" />
 
     <!-- Wrong count badge -->
     <div
@@ -313,6 +319,7 @@ function getBadgeStyle(opt: string) {
         <button
           v-for="opt in trueFalseOptions"
           :key="opt.value"
+          data-haptic="none"
           class="w-full text-left p-3.5 rounded-[20px] border transition-all duration-200 ease-[cubic-bezier(0.34,1.56,0.64,1)] flex items-center gap-3.5 cursor-pointer active:scale-[0.98] shadow-xs"
           :disabled="!interactive"
           :style="getOptionStyle(opt.value, 0)"
@@ -341,6 +348,7 @@ function getBadgeStyle(opt: string) {
         <button
           v-for="(opt, idx) in question.options"
           :key="idx"
+          :data-haptic="question.type === 'single_choice' ? 'none' : undefined"
           class="w-full text-left p-3.5 rounded-[20px] border transition-all duration-200 ease-[cubic-bezier(0.34,1.56,0.64,1)] flex items-center gap-3.5 cursor-pointer active:scale-[0.98] shadow-xs"
           :disabled="!interactive"
           :style="getOptionStyle(optionLabels[idx]!, idx)"
@@ -373,18 +381,13 @@ function getBadgeStyle(opt: string) {
         <button
           class="btn-filled w-full"
           :disabled="!canSubmit"
+          data-haptic="none"
           @click="confirmMultiChoice"
         >
           {{ i18n.t('practiceConfirmAnswer') }}
         </button>
       </div>
 
-      <div v-if="question.type === 'single_choice' && interactive" class="text-xs mt-2 text-center" :style="{ color: 'rgb(var(--md-on-surface-muted))' }">
-        {{ i18n.t('practiceClickToSubmit') }}
-      </div>
-      <div v-if="question.type === 'true_false' && interactive" class="text-xs mt-2 text-center" :style="{ color: 'rgb(var(--md-on-surface-muted))' }">
-        {{ i18n.t('practiceClickToSubmit') }}
-      </div>
       <div v-if="autoAdvancing" class="text-xs mt-1 text-center font-medium" :style="{ color: 'rgb(var(--md-primary))' }">
         {{ i18n.t('practiceCorrectAdvancing') }}
       </div>
@@ -414,6 +417,7 @@ function getBadgeStyle(opt: string) {
           <button
             v-if="question.type === 'fill_blank'"
             class="btn-filled !h-9 text-sm flex-1"
+            data-haptic="none"
             @click="emit('submit', userAnswer)"
           >
             {{ i18n.t('practiceSubmitAuto') }}
@@ -421,11 +425,10 @@ function getBadgeStyle(opt: string) {
           <button
             v-if="question.type === 'short_answer'"
             class="btn-filled !h-9 text-sm flex-1"
-            :disabled="!aiConfigured || aiJudging"
-            @click="emit('aiJudge')"
+            data-haptic="none"
+            @click="emit('submit', userAnswer)"
           >
-            <SparklesIcon class="w-4 h-4" />
-            {{ aiJudging ? i18n.t('practiceAiJudging') : i18n.t('practiceAiJudge') }}
+            提交并查看解析
           </button>
           <button
             v-if="aiJudging"
@@ -481,15 +484,19 @@ function getBadgeStyle(opt: string) {
         <div v-if="question.analysis" class="mt-2 text-sm" :style="{ color: 'rgb(var(--md-on-surface-variant))' }">
           <span class="text-label-sm">{{ i18n.t('practiceReviewAnalysis') }}：</span>{{ question.analysis }}
         </div>
+        <div v-if="isDiagramAnswer" class="mt-3">
+          <div class="text-label-sm">参考答案图</div>
+          <QuestionImages :ids="mediaIds(question.media, 'stem')" />
+        </div>
       </div>
 
       <!-- Self-check buttons (only after reveal) -->
       <div v-if="userAnswer && interactive && answerRevealed" class="flex gap-2 mt-3">
-        <button class="btn-tonal !h-9 text-sm flex-1" @click="handleSelfCheck(true)">
+        <button class="btn-tonal !h-9 text-sm flex-1" data-haptic="none" @click="handleSelfCheck(true)">
           <CheckCircleIcon class="w-4 h-4" />
           {{ i18n.t('practiceSelfCheckCorrect') }}
         </button>
-        <button class="btn-outlined !h-9 text-sm flex-1" @click="handleSelfCheck(false)">
+        <button class="btn-outlined !h-9 text-sm flex-1" data-haptic="none" @click="handleSelfCheck(false)">
           {{ i18n.t('practiceSelfCheckWrong') }}
         </button>
       </div>
@@ -514,6 +521,10 @@ function getBadgeStyle(opt: string) {
         <div v-if="aiFeedback" class="mt-2 text-sm" :style="{ color: 'rgb(var(--md-on-surface-variant))' }">
           <span class="text-label-sm">{{ i18n.t('practiceAiFeedback') }}：</span>{{ aiFeedback }}
         </div>
+        <div v-if="isDiagramAnswer" class="mt-3">
+          <div class="text-label-sm">参考答案图</div>
+          <QuestionImages :ids="mediaIds(question.media, 'stem')" />
+        </div>
       </div>
 
       <!-- Regrade (short answer, after submit) -->
@@ -522,11 +533,11 @@ function getBadgeStyle(opt: string) {
           {{ i18n.t('practiceRegradeHint') }}
         </div>
         <div class="flex gap-2">
-          <button class="btn-tonal !h-9 text-sm flex-1" @click="emit('regrade', true)">
+          <button class="btn-tonal !h-9 text-sm flex-1" data-haptic="none" @click="emit('regrade', true)">
             <CheckCircleIcon class="w-4 h-4" />
             {{ i18n.t('practiceSelfCheckCorrect') }}
           </button>
-          <button class="btn-outlined !h-9 text-sm flex-1" @click="emit('regrade', false)">
+          <button class="btn-outlined !h-9 text-sm flex-1" data-haptic="none" @click="emit('regrade', false)">
             {{ i18n.t('practiceSelfCheckWrong') }}
           </button>
         </div>
@@ -542,6 +553,10 @@ function getBadgeStyle(opt: string) {
         </div>
         <div v-if="question.analysis" class="mt-2 text-sm" :style="{ color: 'rgb(var(--md-on-surface-variant))' }">
           <span class="text-label-sm">{{ i18n.t('practiceReviewAnalysis') }}：</span>{{ question.analysis }}
+        </div>
+        <div v-if="isDiagramAnswer" class="mt-3">
+          <div class="text-label-sm">参考答案图</div>
+          <QuestionImages :ids="mediaIds(question.media, 'stem')" />
         </div>
       </div>
     </div>

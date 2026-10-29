@@ -143,6 +143,7 @@ function serializeMessage(message: ChatMessage, extra?: string): Record<string, 
   }
   if (message.tool_calls) item.tool_calls = message.tool_calls
   if (message.tool_call_id) item.tool_call_id = message.tool_call_id
+  if (message.reasoning_content !== undefined) item.reasoning_content = message.reasoning_content
   return item
 }
 

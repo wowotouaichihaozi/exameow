@@ -18,6 +18,12 @@ const router = createRouter({
       meta: { title: 'Practice' },
     },
     {
+      path: '/ai',
+      name: 'ai-chat',
+      component: () => import('@/views/LearnView.vue'),
+      meta: { title: 'AI 对话' },
+    },
+    {
       path: '/learn',
       name: 'learn',
       component: () => import('@/views/LearnView.vue'),

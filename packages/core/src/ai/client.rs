@@ -9,6 +9,7 @@ use std::pin::Pin;
 #[derive(Debug, Clone)]
 pub enum ChatStreamChunk {
     Text(String),
+    Reasoning(String),
     ToolCalls(Vec<ToolCall>),
 }
 
@@ -173,7 +174,7 @@ impl AIClient {
                             yield text;
                         }
                     }
-                    ChatStreamChunk::ToolCalls(_) => {}
+                    ChatStreamChunk::ToolCalls(_) | ChatStreamChunk::Reasoning(_) => {}
                 }
             }
         };
@@ -228,15 +229,15 @@ impl AIClient {
 
         let mut byte_stream = response.bytes_stream();
         let stream = async_stream::try_stream! {
-            let mut buffer = String::new();
+            let mut buffer: Vec<u8> = Vec::new();
             let mut tool_calls: std::collections::BTreeMap<u64, ToolCall> =
                 std::collections::BTreeMap::new();
             while let Some(chunk) = byte_stream.next().await {
                 let chunk = chunk?;
-                buffer.push_str(&String::from_utf8_lossy(&chunk));
+                buffer.extend_from_slice(&chunk);
                 loop {
-                    let Some(pos) = buffer.find('\n') else { break };
-                    let line = buffer[..pos].trim_end_matches('\r').to_string();
+                    let Some(pos) = buffer.iter().position(|byte| *byte == b'\n') else { break };
+                    let line = String::from_utf8_lossy(&buffer[..pos]).trim_end_matches('\r').to_string();
                     buffer.drain(..=pos);
                     let Some(data) = line.strip_prefix("data:") else { continue };
                     let data = data.trim();
@@ -251,6 +252,15 @@ impl AIClient {
                         return;
                     }
                     let Ok(value) = serde_json::from_str::<serde_json::Value>(data) else { continue };
+                    if let Some(message) = value["error"]["message"].as_str() {
+                        Err(CoreError::AI(message.to_string()))?;
+                    }
+                    let delta = &value["choices"][0]["delta"];
+                    if let Some(text) = delta["reasoning_content"].as_str().or_else(|| delta["reasoning"].as_str()) {
+                        if !text.is_empty() {
+                            yield ChatStreamChunk::Reasoning(text.to_string());
+                        }
+                    }
                     if let Some(text) = value["choices"][0]["delta"]["content"].as_str() {
                         if !text.is_empty() {
                             yield ChatStreamChunk::Text(text.to_string());

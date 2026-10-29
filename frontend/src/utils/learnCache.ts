@@ -56,7 +56,7 @@ export function loadLearnConversation(key: string, stem: string): LearnMessage[]
   const entry = cache[key]
   if (!entry || entry.stem !== stem || !Array.isArray(entry.messages)) return null
   const messages = entry.messages
-    .filter((message) => message && typeof message.content === 'string' && message.content.trim().length > 0)
+    .filter((message) => message && typeof message.content === 'string' && (message.content.trim().length > 0 || message.reasoning?.trim()))
     .filter((message) => message.kind !== 'search' || message.searchStatus !== 'searching')
     .map((message) => ({
       ...message,
@@ -72,7 +72,7 @@ export function saveLearnConversation(key: string, stem: string, messages: Learn
     updatedAt: Date.now(),
     stem,
     messages: messages
-      .filter((message) => message.content.trim().length > 0)
+      .filter((message) => message.content.trim().length > 0 || message.reasoning?.trim())
       .filter((message) => message.kind !== 'search' || message.searchStatus !== 'searching')
       .map((message) => ({
         ...message,

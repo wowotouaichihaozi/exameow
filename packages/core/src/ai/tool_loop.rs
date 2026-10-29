@@ -395,12 +395,13 @@ pub fn chat_tool_loop_stream(
                             count: None,
                         };
                         let mut fallback = client
-                            .chat_messages_stream(messages.clone(), &model)
+                            .chat_messages_stream_with_tools(messages.clone(), &model, Vec::new())
                             .await?;
                         while let Some(item) = fallback.next().await {
-                            let text = item?;
-                            if !text.is_empty() {
-                                yield ChatEvent::Delta { text };
+                            match item? {
+                                ChatStreamChunk::Text(text) => yield ChatEvent::Delta { text },
+                                ChatStreamChunk::Reasoning(text) => yield ChatEvent::Reasoning { text },
+                                ChatStreamChunk::ToolCalls(_) => {},
                             }
                         }
                         yield ChatEvent::Done;
@@ -412,14 +413,21 @@ pub fn chat_tool_loop_stream(
             };
 
             let mut calls: Vec<ToolCall> = Vec::new();
+            let mut reasoning = String::new();
+            let mut content = String::new();
             while let Some(item) = round_stream.next().await {
                 match item? {
                     ChatStreamChunk::Text(text) => {
+                        content.push_str(&text);
                         if !text.is_empty() {
                             yield ChatEvent::Delta { text };
                         }
                     }
                     ChatStreamChunk::ToolCalls(found) => calls = found,
+                    ChatStreamChunk::Reasoning(text) => {
+                        reasoning.push_str(&text);
+                        yield ChatEvent::Reasoning { text };
+                    }
                 }
             }
 
@@ -430,7 +438,8 @@ pub fn chat_tool_loop_stream(
 
             messages.push(ChatMessage {
                 role: "assistant".to_string(),
-                content: String::new(),
+                content,
+                reasoning_content: if reasoning.is_empty() { None } else { Some(reasoning) },
                 tool_calls: Some(calls.clone()),
                 tool_call_id: None,
             });
@@ -443,6 +452,7 @@ pub fn chat_tool_loop_stream(
                             .to_string(),
                         tool_calls: None,
                         tool_call_id: Some(call.id),
+                        reasoning_content: None,
                     });
                     continue;
                 }
@@ -456,6 +466,7 @@ pub fn chat_tool_loop_stream(
                             .to_string(),
                         tool_calls: None,
                         tool_call_id: Some(call.id),
+                        reasoning_content: None,
                     });
                     continue;
                 }
@@ -496,16 +507,18 @@ pub fn chat_tool_loop_stream(
                     content,
                     tool_calls: None,
                     tool_call_id: Some(call.id),
+                    reasoning_content: None,
                 });
             }
         }
 
         // Round cap reached: one final answer without tools.
-        let mut final_stream = client.chat_messages_stream(messages, &model).await?;
+        let mut final_stream = client.chat_messages_stream_with_tools(messages, &model, Vec::new()).await?;
         while let Some(item) = final_stream.next().await {
-            let text = item?;
-            if !text.is_empty() {
-                yield ChatEvent::Delta { text };
+            match item? {
+                ChatStreamChunk::Text(text) => yield ChatEvent::Delta { text },
+                ChatStreamChunk::Reasoning(text) => yield ChatEvent::Reasoning { text },
+                ChatStreamChunk::ToolCalls(_) => {},
             }
         }
         yield ChatEvent::Done;

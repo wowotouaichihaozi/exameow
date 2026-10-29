@@ -5,8 +5,10 @@ import { useI18nStore } from '@/stores/i18n'
 import { SUPPORTED_LOCALES } from '@/i18n/locales'
 import { useTheme, type Theme, type AccentColor } from '@/composables/useTheme'
 import { useDesktopUpdater } from '@/composables/useDesktopUpdater'
+import { useFeedbackStore, type FeedbackLevel, type FeedbackSettings } from '@/stores/feedback'
 import { isTauri, isMobileDevice, isDesktopTauri } from '@/utils/platform'
 import BaseSelect from '@/components/common/BaseSelect.vue'
+import FeedbackLevelSlider from '@/components/common/FeedbackLevelSlider.vue'
 import {
   ArrowLeftIcon,
   LanguageIcon,
@@ -19,6 +21,7 @@ import {
 
 const router = useRouter()
 const i18n = useI18nStore()
+const feedbackStore = useFeedbackStore()
 const { theme, accent, setTheme, setAccent } = useTheme()
 const version = import.meta.env.VITE_APP_VERSION
 
@@ -50,6 +53,25 @@ const otaBusy = ref(false)
 // Desktop updater
 const showDesktopUpdate = isDesktopTauri()
 const updater = useDesktopUpdater()
+
+const feedbackLevels: { value: FeedbackLevel; label: string }[] = [
+  { value: 'off', label: '关闭' },
+  { value: 'low', label: '低' },
+  { value: 'medium', label: '中' },
+  { value: 'high', label: '高' },
+]
+
+const feedbackRows: { key: keyof FeedbackSettings; label: string; hint: string }[] = [
+  { key: 'button', label: '按钮震动', hint: '普通按钮点击时的触感反馈' },
+  { key: 'correct', label: '答对震动', hint: '提交正确答案时触发' },
+  { key: 'wrong', label: '答错震动', hint: '提交错误答案时触发' },
+  { key: 'screenShake', label: '答错视觉震屏', hint: '显示解析时画面轻微晃动' },
+]
+
+function setFeedbackLevel(key: keyof FeedbackSettings, level: FeedbackLevel) {
+  feedbackStore.setLevel(key, level)
+  if (key !== 'screenShake') feedbackStore.preview(key)
+}
 
 onMounted(async () => {
   if (!showOta) return
@@ -190,6 +212,41 @@ async function handleOtaCheck() {
               {{ i18n.t(a.key) }}
             </span>
           </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Haptics and motion feedback -->
+    <div class="card-filled p-5 sm:p-6 mb-4">
+      <div class="flex items-start gap-3 mb-4">
+        <div
+          class="w-10 h-10 rounded-2xl flex items-center justify-center shrink-0"
+          :style="{ backgroundColor: 'rgb(var(--md-secondary-container))', color: 'rgb(var(--md-on-secondary-container))' }"
+        >
+          <SparklesIcon class="w-5 h-5" />
+        </div>
+        <div>
+          <div class="text-title-sm font-semibold">震动与反馈</div>
+          <p class="text-body-sm mt-0.5" :style="{ color: 'rgb(var(--md-on-surface-variant))' }">
+            分别设置按钮、答题结果和答错动画的强度。
+          </p>
+        </div>
+      </div>
+
+      <div class="space-y-4">
+        <div v-for="row in feedbackRows" :key="row.key">
+          <div class="flex items-center justify-between gap-3 mb-2">
+            <div>
+              <div class="text-body-sm font-medium">{{ row.label }}</div>
+              <div class="text-xs mt-0.5" :style="{ color: 'rgb(var(--md-on-surface-variant))' }">{{ row.hint }}</div>
+            </div>
+          </div>
+          <FeedbackLevelSlider
+            :model-value="feedbackStore.settings[row.key]"
+            :label="row.label"
+            :levels="feedbackLevels"
+            @update:model-value="setFeedbackLevel(row.key, $event)"
+          />
         </div>
       </div>
     </div>

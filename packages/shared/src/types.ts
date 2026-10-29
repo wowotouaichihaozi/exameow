@@ -254,6 +254,7 @@ export interface ChatMessage {
   content: string
   tool_calls?: ToolCall[]
   tool_call_id?: string
+  reasoning_content?: string
 }
 
 export interface ChatResult {

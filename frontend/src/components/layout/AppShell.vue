@@ -2,6 +2,7 @@
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useI18nStore } from '@/stores/i18n'
+import { useUiStore } from '@/stores/ui'
 import { useTheme } from '@/composables/useTheme'
 import { isTauri, isMacOS, isWindows, isLinux } from '@/utils/platform'
 import TitleBar from './TitleBar.vue'
@@ -17,11 +18,13 @@ import {
   MagnifyingGlassIcon,
   UserCircleIcon,
   LanguageIcon,
+  ChatBubbleLeftRightIcon,
 } from '@heroicons/vue/24/outline'
 
 const router = useRouter()
 const route = useRoute()
 const i18n = useI18nStore()
+const uiStore = useUiStore()
 const showLanguageDialog = ref(false)
 
 const { theme, cycleTheme } = useTheme()
@@ -41,6 +44,7 @@ const navItems = [
   { key: 'navPractice', path: '/practice', icon: AcademicCapIcon },
   { key: 'navGenerate', path: '/generate', icon: SparklesIcon },
   { key: 'navSearch', path: '/search', icon: MagnifyingGlassIcon },
+  { key: 'AI 对话', path: '/ai', icon: ChatBubbleLeftRightIcon },
   { key: 'navMine', path: '/mine', icon: UserCircleIcon },
 ]
 
@@ -89,12 +93,17 @@ const headerStyle = {
 </script>
 
 <template>
-  <div class="min-h-screen flex flex-col" :style="{ backgroundColor: 'rgb(var(--md-surface))' }">
+  <div
+    class="flex flex-col"
+    :class="uiStore.immersive || route.path === '/ai' ? 'h-dvh overflow-hidden' : 'min-h-screen'"
+    :style="{ backgroundColor: 'rgb(var(--md-surface))' }"
+  >
     <!-- ====== Desktop TitleBar (Tauri only) ====== -->
     <TitleBar v-if="isDesktopTauri" />
 
     <!-- ====== Top App Bar ====== -->
     <header
+      v-if="!uiStore.immersive"
       class="sticky z-30 select-none"
       :class="isDesktopTauri ? 'top-[38px]' : 'top-0 safe-top'"
       :style="headerStyle"
@@ -137,7 +146,7 @@ const headerStyle = {
               @click="router.push(item.path)"
             >
               <component :is="item.icon" class="w-4 h-4 transition-transform duration-200" :class="{ 'scale-110': isNavActive(item) }" />
-              <span>{{ i18n.t(item.key as any) }}</span>
+              <span>{{ item.path === '/ai' ? 'AI 对话' : i18n.t(item.key as any) }}</span>
             </button>
           </nav>
         </div>
@@ -176,7 +185,12 @@ const headerStyle = {
     </header>
 
     <!-- ====== Main Content ====== -->
-    <main class="flex-1 mx-auto w-full max-w-5xl xl:max-w-6xl px-3 sm:px-6 py-4 sm:py-7">
+    <main
+      class="flex-1"
+      :class="uiStore.immersive || route.path === '/ai'
+        ? 'min-h-0 w-full max-w-none overflow-hidden p-0'
+        : 'mx-auto w-full max-w-5xl xl:max-w-6xl px-3 sm:px-6 py-4 sm:py-7'"
+    >
       <router-view v-slot="{ Component }">
         <transition name="slide-up" mode="out-in">
           <component :is="Component" />
@@ -186,6 +200,7 @@ const headerStyle = {
 
     <!-- ====== Bottom Navigation Bar (Mobile Pixel M3) ====== -->
     <nav
+      v-if="!uiStore.immersive"
       class="sm:hidden sticky bottom-0 z-30 safe-bottom"
       :style="{
         backgroundColor: 'rgba(var(--md-surface-container-lowest) / 0.92)',
@@ -224,7 +239,7 @@ const headerStyle = {
               class="w-5 h-5 transition-transform duration-300 ease-[cubic-bezier(0.34,1.56,0.64,1)]"
               :style="{ transform: isNavActive(item) ? 'scale(1.15) translateY(-1px)' : 'scale(1)' }"
             />
-            <span class="text-[11px] font-semibold leading-tight tracking-tight">{{ i18n.t(item.key as any) }}</span>
+            <span class="text-[11px] font-semibold leading-tight tracking-tight">{{ item.path === '/ai' ? 'AI 对话' : i18n.t(item.key as any) }}</span>
           </button>
         </div>
       </div>

@@ -28,6 +28,17 @@
   <a href="https://hub.docker.com/r/ailm32442/exameow">Docker Hub</a>
 </p>
 
+## Personal fork: mobile experience and AI conversations
+
+This fork of [heshengtao/exameow](https://github.com/heshengtao/exameow) focuses on a smoother mobile practice experience and persistent AI conversations. The current custom app version is **1.10.0**.
+
+- Mobile practice uses fixed progress and navigation bars with safe-area spacing. Swipe gestures preview adjacent questions, preserve vertical scrolling, and the answer sheet opens at the current question.
+- Button, correct-answer and wrong-answer vibration, plus the wrong-answer shake animation, have separate sliders. True/false answer normalization is also corrected.
+- A new **AI Chat** tab brings general chat, **Learn with AI** and selected wrong-question summaries into one conversation history. Sessions can be reopened and continued; ordinary per-question AI explanations stay outside that history.
+- Replies stream as they arrive, including reasoning text when returned by the provider. Thinking effort is adjustable with a slider, and follow-up messages request a reply immediately.
+
+The project documentation and download/demo links below describe the upstream project. This fork's source includes the custom changes above; local toolchains, caches, personal data and APK files are excluded from Git.
+
 ## What is Exameow?
 
 **Exameow (过了喵)** is an **open-source AI exam question generator** that turns your study materials into exam-quality questions in seconds. Upload PDFs, Word documents, PowerPoint slides, images, or text — the AI reads the content and generates multiple-choice, true/false, fill-in-the-blank, and short-answer questions tailored to your needs.

@@ -260,6 +260,8 @@ export const tauriApi = {
       if (signal?.aborted) return
       if (event?.type === 'delta' && typeof event.text === 'string') {
         handlers.onDelta(event.text)
+      } else if (event?.type === 'reasoning' && typeof event.text === 'string') {
+        handlers.onReasoning?.(event.text)
       } else if (event?.type === 'tool') {
         handlers.onTool?.({
           id: typeof event.id === 'string' ? event.id : '',

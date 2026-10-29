@@ -8,6 +8,7 @@ import { matchPracticeFilter, reconcileMockConfig } from '@/utils/practiceFilter
 import { isMediaAvailable, putImage, pruneUnreferenced } from '@/utils/mediaStore'
 import { supportsLocalMedia } from '@/utils/capabilities'
 import { normalizeBanks, normalizeSession } from '@/utils/dataCompat'
+import { normalizeTrueFalseAnswer } from '@/utils/answerNormalization'
 
 const STORAGE_KEY = 'exameow-banks'
 const SESSION_KEY = 'exameow-practice-session'
@@ -401,15 +402,6 @@ export const usePracticeStore = defineStore('practice', () => {
     saveSession(session.value)
   }
 
-  function normalizeTF(ans: string): string {
-    const t = ans.trim().toUpperCase()
-    if (['A', '√', '对', '正确', 'TRUE', 'T', '是', 'YES', 'Y', '1'].some(v => t === v.toUpperCase() || t.includes(v))) return 'TRUE'
-    if (['B', '×', '错', '错误', 'FALSE', 'F', '否', 'NO', 'N', '0'].some(v => t === v.toUpperCase() || t.includes(v))) return 'FALSE'
-    if (t === 'TRUE' || t.includes('TRUE') || t.includes('对') || t.includes('正确')) return 'TRUE'
-    if (t === 'FALSE' || t.includes('FALSE') || t.includes('错') || t.includes('错误')) return 'FALSE'
-    return t
-  }
-
   function submitAnswer(answer: string | null): boolean | null {
     if (!session.value) return null
     const item = session.value.questions[session.value.currentIndex]
@@ -423,8 +415,8 @@ export const usePracticeStore = defineStore('practice', () => {
       const correctAns = q.answer.trim().toUpperCase().replace(/[^A-H]/g, '').split('').sort().join('')
       item.isCorrect = userAns === correctAns
     } else if (q.type === 'true_false') {
-      const userAns = normalizeTF(answer ?? '')
-      const correctAns = normalizeTF(q.answer)
+      const userAns = normalizeTrueFalseAnswer(answer ?? '')
+      const correctAns = normalizeTrueFalseAnswer(q.answer)
       item.isCorrect = userAns === correctAns
     } else if (q.type === 'fill_blank') {
       const userAns = (answer ?? '').trim().toLowerCase()

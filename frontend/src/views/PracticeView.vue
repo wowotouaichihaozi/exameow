@@ -6,12 +6,14 @@ import { usePracticeStore } from '@/stores/practice'
 import { useWrongQuestionsStore } from '@/stores/wrongQuestions'
 import { useConfigStore } from '@/stores/config'
 import { useLearnStore } from '@/stores/learn'
+import { useUiStore } from '@/stores/ui'
+import { useFeedbackStore } from '@/stores/feedback'
 import { api } from '@/api'
 import { isCloudflare } from '@/utils/platform'
 import { getResumedPracticeSettings, matchPracticeFilter, reconcileMockConfig, reconcileMockTypeCounts } from '@/utils/practiceFilter'
 import { buildSearchQuery, searchWithCache } from '@/utils/webSearch'
-import type { JudgeResult, ExplainResult, WebSearchResult } from '@exameow/shared'
 import { useSwipeNavigation } from '@/composables/useSwipeNavigation'
+import type { JudgeResult, ExplainResult, WebSearchResult } from '@exameow/shared'
 import type { PracticeMode, MockExamConfig, WrongSort, PracticeFilter, QuestionType } from '@exameow/shared'
 import type { LocaleMessages } from '@/i18n/locales'
 import type { PracticeDifficulty, PracticeFilterComparison } from '@/utils/practiceFilter'
@@ -20,6 +22,7 @@ import FilterBar from '@/components/practice/FilterBar.vue'
 import ImportDialog from '@/components/practice/ImportDialog.vue'
 import ModeSelector from '@/components/practice/ModeSelector.vue'
 import MockExamConfigComponent from '@/components/practice/MockExamConfig.vue'
+import WrongQuestionsAiPanel from '@/components/practice/WrongQuestionsAiPanel.vue'
 import QuestionCard from '@/components/practice/QuestionCard.vue'
 import ProgressBar from '@/components/practice/ProgressBar.vue'
 import PracticeResult from '@/components/practice/PracticeResult.vue'
@@ -46,6 +49,8 @@ const practiceStore = usePracticeStore()
 const wrongStore = useWrongQuestionsStore()
 const configStore = useConfigStore()
 const learnStore = useLearnStore()
+const uiStore = useUiStore()
+const feedbackStore = useFeedbackStore()
 
 type ViewState = 'browse' | 'settings' | 'practice' | 'result'
 
@@ -75,47 +80,32 @@ const wrongSort = ref<WrongSort>('count-desc')
 const wrongToast = ref<string | null>(null)
 const savedMainSession = ref<any>(null)
 const flashcardMode = ref<'exam' | 'flashcard'>('exam')
+const wrongShakeActive = ref(false)
+let wrongShakeTimer: number | null = null
 const swipeContainer = ref<HTMLElement | null>(null)
-
-let pendingDirection: 'next' | 'prev' | null = null
 
 function isView(state: ViewState) {
   return viewState.value === state
 }
 
-function doNavigate(dir: 'next' | 'prev') {
-  if (animating.value) return
-  if (dir === 'prev') {
-    if (practiceStore.isFirstQuestion) return
-    practiceStore.prevQuestion()
-  } else {
-    if (practiceStore.isLastQuestion) {
-      showSubmitConfirm.value = true
-      return
-    }
-    practiceStore.nextQuestion()
-  }
-}
-
-function triggerNav(dir: 'next' | 'prev', fromGesture: boolean) {
-  if (animating.value) return
-  if (dir === 'prev' && practiceStore.isFirstQuestion) return
-  if (dir === 'next' && practiceStore.isLastQuestion) {
-    showSubmitConfirm.value = true
-    return
-  }
-  if (fromGesture) {
-    pendingDirection = dir
-  } else {
-    doNavigate(dir)
-    pendingDirection = null
-  }
+function triggerWrongShake() {
+  if (feedbackStore.settings.screenShake === 'off') return
+  wrongShakeActive.value = false
+  if (wrongShakeTimer !== null) window.clearTimeout(wrongShakeTimer)
+  window.requestAnimationFrame(() => {
+    window.requestAnimationFrame(() => {
+      wrongShakeActive.value = true
+      wrongShakeTimer = window.setTimeout(() => {
+        wrongShakeActive.value = false
+        wrongShakeTimer = null
+      }, 360)
+    })
+  })
 }
 
 function goPrev() {
   if (practiceStore.isFirstQuestion) return
-  triggerNav('prev', true)
-  triggerSlide('prev', 0)
+  practiceStore.prevQuestion()
 }
 
 function goNext() {
@@ -123,31 +113,54 @@ function goNext() {
     showSubmitConfirm.value = true
     return
   }
-  triggerNav('next', true)
-  triggerSlide('next', 0)
+  practiceStore.nextQuestion()
 }
 
-const { slideOffset, animating, triggerSlide, finishAnimation, attach, detach } = useSwipeNavigation(
-  (dir) => triggerNav(dir, true),
-  (direction, offset, width) => {
-    const target = direction === 'next'
-      ? -width
-      : width
-    slideOffset.value = offset
-    void (swipeContainer.value?.offsetWidth)
-    slideOffset.value = target
+const {
+  slideOffset,
+  transitioning: swipeTransitioning,
+  dragging: swipeDragging,
+  settling: swipeSettling,
+  cancel: cancelSwipe,
+  attach: attachSwipe,
+  detach: detachSwipe,
+} = useSwipeNavigation(
+  (direction) => {
+    feedbackStore.vibrate('button')
+    if (direction === 'prev') {
+      if (!practiceStore.isFirstQuestion) practiceStore.prevQuestion()
+      return
+    }
+    if (practiceStore.isLastQuestion) {
+      showSubmitConfirm.value = true
+      return
+    }
+    practiceStore.nextQuestion()
+  },
+  {
+    canNavigate: direction => direction === 'prev'
+      ? !practiceStore.isFirstQuestion
+      : !practiceStore.isLastQuestion,
+    disabled: () => viewState.value !== 'practice' || autoAdvancing.value
+      || showAnswerSheet.value || showSubmitConfirm.value,
   },
 )
 
-function onTransitionEnd() {
-  if (animating.value && pendingDirection) {
-    const dir = pendingDirection
-    pendingDirection = null
-    finishAnimation()
-    doNavigate(dir)
-  } else {
-    finishAnimation()
-  }
+const questionPages = computed(() => {
+  const session = practiceStore.session
+  if (!session) return []
+  return [-1, 0, 1].flatMap(offset => {
+    const index = session.currentIndex + offset
+    const item = session.questions[index]
+    return item ? [{ offset, index, item }] : []
+  })
+})
+
+function wrongCountFor(questionId: string) {
+  if (!practiceStore.session || practiceStore.session.mode !== 'wrong') return undefined
+  return wrongStore.getWrongEntry(
+    practiceStore.session.bankId, questionId.replace(/-s\d+$/, ''),
+  )?.wrongCount
 }
 
 const isMockMode = computed(() => practiceStore.session?.mode === 'mock')
@@ -178,13 +191,6 @@ const isWrongMode = computed(() => practiceStore.session?.mode === 'wrong')
 
 const sessionBankId = computed(() => practiceStore.session?.bankId ?? null)
 
-const currentWrongCount = computed(() => {
-  if (!practiceStore.session || !practiceStore.currentQuestion) return undefined
-  if (practiceStore.session.mode !== 'wrong') return undefined
-  const originalId = practiceStore.currentQuestion.question.id.replace(/-s\d+$/, '')
-  return wrongStore.getWrongEntry(practiceStore.session.bankId, originalId)?.wrongCount
-})
-
 const resumeSessionHasWrong = computed(() => {
   if (!practiceStore.session) return false
   return wrongStore.getWrongQuestions(practiceStore.session.bankId, wrongSort.value)
@@ -203,20 +209,31 @@ onMounted(() => {
   }
 })
 
-watch([viewState, () => practiceStore.session], ([state]) => {
-  nextTick(() => {
-    if (swipeContainer.value) {
-      detach(swipeContainer.value)
-    }
-    if (state === 'practice' && swipeContainer.value) {
-      attach(swipeContainer.value)
-    }
-  })
-})
+watch(
+  viewState,
+  (state) => uiStore.setImmersive(state === 'practice'),
+  { immediate: true },
+)
+
+watch(
+  [viewState, () => practiceStore.session],
+  async ([state]) => {
+    await nextTick()
+    if (swipeContainer.value) detachSwipe(swipeContainer.value)
+    if (state === 'practice' && swipeContainer.value) attachSwipe(swipeContainer.value)
+  },
+  { flush: 'post' },
+)
 
 watch(
   [() => practiceStore.session?.currentIndex, () => practiceStore.session?.startedAt],
   () => {
+    cancelSwipe()
+    wrongShakeActive.value = false
+    // Each neighboring page starts at its question stem when it becomes active.
+    swipeContainer.value?.querySelectorAll<HTMLElement>('.question-page').forEach(page => {
+      page.scrollTop = 0
+    })
     judgeAbort?.abort()
     judgeAbort = null
     aiJudging.value = false
@@ -232,9 +249,9 @@ watch(
 onUnmounted(() => {
   judgeAbort?.abort()
   explainAbort?.abort()
-  if (swipeContainer.value) {
-    detach(swipeContainer.value)
-  }
+  if (wrongShakeTimer !== null) window.clearTimeout(wrongShakeTimer)
+  if (swipeContainer.value) detachSwipe(swipeContainer.value)
+  uiStore.setImmersive(false)
 })
 
 function resumeSession() {
@@ -428,6 +445,11 @@ function handleSelect(answer: string | null) {
 
 function handleSubmit(answer: string | null) {
   const isCorrect = practiceStore.submitAnswer(answer)
+  if (isCorrect === true) feedbackStore.vibrate('correct')
+  if (isCorrect === false) {
+    feedbackStore.vibrate('wrong')
+    triggerWrongShake()
+  }
 
   if (practiceStore.currentQuestion && sessionBankId.value) {
     const originalId = practiceStore.currentQuestion.question.id.replace(/-s\d+$/, '')
@@ -456,6 +478,8 @@ function handleSubmit(answer: string | null) {
 
 function applyGrade(correct: boolean) {
   practiceStore.selfCheck(correct)
+  feedbackStore.vibrate(correct ? 'correct' : 'wrong')
+  if (!correct) triggerWrongShake()
 
   if (practiceStore.currentQuestion && sessionBankId.value) {
     const originalId = practiceStore.currentQuestion.question.id.replace(/-s\d+$/, '')
@@ -747,9 +771,9 @@ function handleBack() {
 </script>
 
 <template>
-  <div>
+  <div :class="{ 'h-full min-h-0 overflow-hidden': isView('practice') }">
     <!-- Header -->
-    <div class="flex items-center justify-between mb-4">
+    <div v-if="viewState !== 'practice'" class="flex items-center justify-between mb-4">
       <div>
         <h1 class="text-display-sm mb-1">{{ i18n.t('practiceTitle') }}</h1>
         <p class="text-body-lg" :style="{ color: 'rgb(var(--md-on-surface-variant))' }">
@@ -879,6 +903,7 @@ function handleBack() {
           {{ i18n.t('practiceClearRecords') }}
         </button>
       </div>
+      <WrongQuestionsAiPanel :bank-id="selectedBankId" />
       <div class="grid gap-4 lg:grid-cols-2 items-start">
         <ModeSelector
           v-model="selectedMode"
@@ -917,82 +942,128 @@ function handleBack() {
 
     <!-- Practice View -->
     <template v-if="isView('practice') && practiceStore.session && practiceStore.currentQuestion">
-      <div ref="swipeContainer" class="space-y-4 cursor-grab select-none">
-        <!-- Progress Bar + Mode Toggle -->
-        <div class="card-outlined p-3">
-          <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-            <ProgressBar
-              :mode="practiceStore.session.mode"
-              :current="practiceStore.progress.current"
-              :total="practiceStore.progress.total"
-              :answered-count="practiceStore.answeredCount"
-              @open-sheet="showAnswerSheet = true"
-              class="flex-1 min-w-0"
-            />
-            <PracticeModeToggle
-              v-model="flashcardMode"
-            />
+      <div class="flex h-full min-h-0 flex-col overflow-hidden">
+        <!-- Fixed question navigation and progress -->
+        <div
+          class="shrink-0 safe-top border-b px-3 py-3"
+          :style="{
+            backgroundColor: 'rgba(var(--md-surface) / 0.94)',
+            borderColor: 'rgb(var(--md-outline-variant) / 0.45)',
+            backdropFilter: 'blur(16px)',
+            WebkitBackdropFilter: 'blur(16px)',
+            paddingTop: 'max(env(safe-area-inset-top, 0px), 28px)',
+          }"
+        >
+          <div class="mx-auto flex w-full max-w-5xl items-start gap-2">
+            <div class="min-w-0 flex-1 space-y-2">
+              <ProgressBar
+                :mode="practiceStore.session.mode"
+                :current="practiceStore.progress.current"
+                :total="practiceStore.progress.total"
+                :answered-count="practiceStore.answeredCount"
+                @open-sheet="showAnswerSheet = true"
+              />
+              <PracticeModeToggle v-model="flashcardMode" />
+            </div>
+            <button
+              class="btn-icon shrink-0"
+              :aria-label="i18n.t('btnBack')"
+              :title="i18n.t('btnBack')"
+              @click="handleBack"
+            >
+              <ArrowLeftIcon class="w-5 h-5 rtl:rotate-180" />
+            </button>
           </div>
         </div>
 
-        <!-- Question Card -->
-        <div
-          :style="{
-            transform: `translateX(${slideOffset}px)`,
-            transition: animating ? 'transform 0.28s cubic-bezier(0.2, 0, 0, 1)' : 'none',
-          }"
-          @transitionend="onTransitionEnd"
-        >
-          <QuestionCard
-            :key="practiceStore.session.currentIndex"
-            :question="practiceStore.currentQuestion.question"
-            :mode="practiceStore.session.mode"
-            :user-answer="practiceStore.currentQuestion.userAnswer"
-            :is-correct="practiceStore.currentQuestion.isCorrect"
-            :submitted="practiceStore.currentSubmitted"
-            :question-number="practiceStore.progress.current"
-            :auto-advancing="autoAdvancing"
-            :wrong-count="currentWrongCount"
-            :is-wrong-mode="isWrongMode"
-            :flashcard-mode="flashcardMode === 'flashcard'"
-            :ai-configured="configStore.configured"
-            :ai-judging="aiJudging"
-            :ai-feedback="aiFeedback"
-            :ai-judge-error="aiJudgeError"
-            :ai-explaining="aiExplaining"
-            :ai-explain-error="aiExplainError"
-            @ai-judge="handleAiJudge"
-            @ai-cancel="handleAiCancel"
-            @ai-explain="handleAiExplain"
-            @ai-ask="handleAiAsk"
-            @regrade="handleRegrade"
-            @submit="handleSubmit"
-            @select="handleSelect"
-            @self-check="handleSelfCheck"
-            @remove-wrong="handleRemoveWrong"
-          />
+        <!-- Three real pages move together so a partial swipe previews the neighbor. -->
+        <div ref="swipeContainer" class="question-pager relative min-h-0 flex-1 overflow-hidden">
+          <div
+            class="absolute inset-0"
+            :class="{ 'select-none': swipeDragging }"
+            :style="{
+              transform: `translate3d(${slideOffset}px, 0, 0)`,
+              transition: swipeTransitioning ? 'transform 200ms cubic-bezier(0.2, 0.75, 0.25, 1)' : 'none',
+              willChange: swipeDragging || swipeSettling ? 'transform' : undefined,
+            }"
+          >
+            <section
+              v-for="page in questionPages"
+              :key="page.item.question.id"
+              class="question-page absolute inset-0 overflow-y-auto overscroll-y-contain px-3 py-3"
+              :inert="page.offset !== 0 || swipeSettling"
+              :aria-hidden="page.offset !== 0"
+              :data-question-index="page.index"
+              :style="{ transform: `translate3d(${page.offset * 100}%, 0, 0)` }"
+            >
+              <div
+                class="mx-auto w-full max-w-5xl"
+                :class="page.offset === 0 && wrongShakeActive
+                  ? `answer-wrong-shake answer-wrong-shake--${feedbackStore.settings.screenShake}`
+                  : ''"
+              >
+            <QuestionCard
+              :question="page.item.question"
+              :mode="practiceStore.session.mode"
+              :user-answer="page.item.userAnswer"
+              :is-correct="page.item.isCorrect"
+              :submitted="page.item.submitted === true"
+              :question-number="page.index + 1"
+              :auto-advancing="autoAdvancing"
+              :wrong-count="wrongCountFor(page.item.question.id)"
+              :is-wrong-mode="isWrongMode"
+              :flashcard-mode="flashcardMode === 'flashcard'"
+              :ai-configured="configStore.configured"
+              :ai-judging="page.offset === 0 && aiJudging"
+              :ai-feedback="page.offset === 0 ? aiFeedback : null"
+              :ai-judge-error="page.offset === 0 ? aiJudgeError : null"
+              :ai-explaining="page.offset === 0 && aiExplaining"
+              :ai-explain-error="page.offset === 0 ? aiExplainError : null"
+              @ai-judge="handleAiJudge"
+              @ai-cancel="handleAiCancel"
+              @ai-explain="handleAiExplain"
+              @ai-ask="handleAiAsk"
+              @regrade="handleRegrade"
+              @submit="handleSubmit"
+              @select="handleSelect"
+              @self-check="handleSelfCheck"
+              @remove-wrong="handleRemoveWrong"
+            />
+              </div>
+            </section>
+          </div>
         </div>
 
-        <!-- Navigation -->
-        <div class="flex items-center gap-3">
-          <button
-            class="btn-tonal flex-1"
-            :disabled="practiceStore.isFirstQuestion"
-            @click="goPrev"
-          >
-            {{ i18n.t('practicePrevBtn') }}
-          </button>
+        <!-- Fixed bottom controls. The number is the answered count by design. -->
+        <div
+          class="shrink-0 safe-bottom border-t px-3 py-3"
+          :style="{
+            backgroundColor: 'rgba(var(--md-surface) / 0.94)',
+            borderColor: 'rgb(var(--md-outline-variant) / 0.45)',
+            backdropFilter: 'blur(16px)',
+            WebkitBackdropFilter: 'blur(16px)',
+          }"
+        >
+          <div class="mx-auto flex w-full max-w-5xl items-center gap-3">
+            <button
+              class="btn-tonal flex-1"
+              :disabled="practiceStore.isFirstQuestion || autoAdvancing || swipeSettling"
+              @click="goPrev"
+            >
+              {{ i18n.t('practicePrevBtn') }}
+            </button>
 
-          <button class="btn-filled flex-1" @click="goNext" :disabled="autoAdvancing">
-            <template v-if="practiceStore.isLastQuestion">
-              <CheckIcon class="w-4 h-4" />
-              {{ i18n.t('practiceSubmitBtn') }}
-            </template>
-            <template v-else>
-              {{ i18n.t('practiceNextBtn') }}
-              <span class="text-xs opacity-60">({{ practiceStore.answeredCount }}/{{ practiceStore.progress.total }})</span>
-            </template>
-          </button>
+            <button class="btn-filled flex-1" @click="goNext" :disabled="autoAdvancing || swipeSettling">
+              <template v-if="practiceStore.isLastQuestion">
+                <CheckIcon class="w-4 h-4" />
+                {{ i18n.t('practiceSubmitBtn') }}
+              </template>
+              <template v-else>
+                {{ i18n.t('practiceNextBtn') }}
+                <span class="text-xs opacity-60">({{ practiceStore.answeredCount }}/{{ practiceStore.progress.total }})</span>
+              </template>
+            </button>
+          </div>
         </div>
       </div>
     </template>
@@ -1116,3 +1187,47 @@ function handleBack() {
     </Transition>
   </div>
 </template>
+
+<style scoped>
+.question-pager,
+.question-page {
+  touch-action: pan-y pinch-zoom;
+}
+
+.question-pager :deep(img) {
+  -webkit-user-drag: none;
+}
+
+.answer-wrong-shake {
+  animation: answer-wrong-shake 0.34s cubic-bezier(0.36, 0.07, 0.19, 0.97);
+  will-change: transform;
+}
+
+.answer-wrong-shake--low {
+  --wrong-shake-distance: 4px;
+}
+
+.answer-wrong-shake--medium {
+  --wrong-shake-distance: 8px;
+}
+
+.answer-wrong-shake--high {
+  --wrong-shake-distance: 13px;
+}
+
+@keyframes answer-wrong-shake {
+  0%, 100% { transform: translateX(0); }
+  14% { transform: translateX(calc(-1 * var(--wrong-shake-distance))); }
+  28% { transform: translateX(var(--wrong-shake-distance)); }
+  42% { transform: translateX(calc(-0.75 * var(--wrong-shake-distance))); }
+  56% { transform: translateX(calc(0.75 * var(--wrong-shake-distance))); }
+  70% { transform: translateX(calc(-0.4 * var(--wrong-shake-distance))); }
+  84% { transform: translateX(calc(0.4 * var(--wrong-shake-distance))); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .answer-wrong-shake {
+    animation: none;
+  }
+}
+</style>

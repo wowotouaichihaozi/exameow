@@ -233,9 +233,12 @@ export async function runToolLoop(params: ToolLoopParams): Promise<void> {
   let totalCalls = 0
 
   for (let round = 0; round < maxRounds; round++) {
+    let roundReasoning = ''
+    let roundText = ''
     let roundError: unknown = null
     const roundHandlers: ChatStreamHandlers = {
-      onDelta: handlers.onDelta,
+      onDelta: text => { roundText += text; handlers.onDelta(text) },
+      onReasoning: text => { roundReasoning += text; handlers.onReasoning?.(text) },
       onDone: () => {},
       onError: (error) => {
         roundError = error
@@ -268,7 +271,7 @@ export async function runToolLoop(params: ToolLoopParams): Promise<void> {
       return
     }
 
-    working.push({ role: 'assistant', content: '', tool_calls: calls })
+    working.push({ role: 'assistant', content: roundText, tool_calls: calls, ...(roundReasoning ? { reasoning_content: roundReasoning } : {}) })
 
     for (const [index, call] of calls.entries()) {
       if (index >= MAX_CALLS_PER_ROUND || totalCalls >= MAX_CALLS_TOTAL) {

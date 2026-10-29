@@ -1,9 +1,11 @@
 <script setup lang="ts">
-import { computed, defineAsyncComponent, onMounted, ref } from 'vue'
+import { computed, defineAsyncComponent, onMounted, onUnmounted, ref } from 'vue'
 import { useConfigStore } from '@/stores/config'
+import { useFeedbackStore } from '@/stores/feedback'
 import AppShell from '@/components/layout/AppShell.vue'
 
 const configStore = useConfigStore()
+const feedbackStore = useFeedbackStore()
 
 const childWindow = ref<string | null>(null)
 
@@ -27,7 +29,16 @@ const childComponent = computed(() => {
   return null
 })
 
+function handleGlobalButtonFeedback(event: MouseEvent) {
+  const target = event.target
+  if (!(target instanceof Element)) return
+  const button = target.closest('button') as HTMLButtonElement | null
+  if (!button || button.disabled || button.dataset.haptic === 'none') return
+  feedbackStore.vibrate('button')
+}
+
 onMounted(async () => {
+  document.addEventListener('click', handleGlobalButtonFeedback, true)
   // Tauri API 确认（覆盖 hash 检测结果）
   try {
     const { getCurrentWindow } = await import('@tauri-apps/api/window')
@@ -56,6 +67,10 @@ onMounted(async () => {
       tauriApi.otaDownload().catch(() => {})
     } catch { /* OTA unavailable */ }
   }
+})
+
+onUnmounted(() => {
+  document.removeEventListener('click', handleGlobalButtonFeedback, true)
 })
 </script>
 

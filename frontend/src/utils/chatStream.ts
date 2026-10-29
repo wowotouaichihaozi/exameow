@@ -11,6 +11,7 @@ export interface ChatToolEvent {
 
 export interface ChatStreamHandlers {
   onDelta: (text: string) => void
+  onReasoning?: (text: string) => void
   onDone: () => void
   onError: (error: unknown) => void
   onTool?: (event: ChatToolEvent) => void
@@ -34,6 +35,7 @@ async function* sseFrames(
       const { done, value } = await reader.read()
       if (done) break
       buffer += decoder.decode(value, { stream: true })
+      buffer = buffer.replace(/\r\n/g, '\n')
       let index: number
       while ((index = buffer.indexOf('\n\n')) >= 0) {
         const frame = buffer.slice(0, index)
@@ -88,6 +90,8 @@ export async function consumeChatSse(
         }
         if (event.type === 'delta' && typeof event.text === 'string') {
           handlers.onDelta(event.text)
+        } else if (event.type === 'reasoning' && typeof event.text === 'string') {
+          handlers.onReasoning?.(event.text)
         } else if (event.type === 'tool') {
           handlers.onTool?.({
             id: typeof event.id === 'string' ? event.id : '',
@@ -170,8 +174,8 @@ export async function consumeOpenAiSse(
           error?: { message?: string }
           tool_calls?: Record<string, unknown>[]
           choices?: {
-            delta?: { content?: string; tool_calls?: Record<string, unknown>[] }
-            message?: { content?: string; tool_calls?: Record<string, unknown>[] }
+            delta?: { content?: string; reasoning_content?: string; reasoning?: string; tool_calls?: Record<string, unknown>[] }
+            message?: { content?: string; reasoning_content?: string; reasoning?: string; tool_calls?: Record<string, unknown>[] }
           }[]
         }
         try {
@@ -186,6 +190,9 @@ export async function consumeOpenAiSse(
           break
         }
         const delta = parsed.choices?.[0]?.delta?.content
+        const chunk = parsed.choices?.[0]?.delta ?? parsed.choices?.[0]?.message
+        const reasoning = chunk?.reasoning_content ?? chunk?.reasoning
+        if (typeof reasoning === 'string' && reasoning) handlers.onReasoning?.(reasoning)
         if (typeof delta === 'string' && delta) handlers.onDelta(delta)
         const messageContent = parsed.choices?.[0]?.message?.content
         if (typeof messageContent === 'string' && messageContent) {

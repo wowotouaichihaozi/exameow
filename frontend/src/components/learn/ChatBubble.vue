@@ -24,7 +24,7 @@ const isSearch = computed(() => props.message.kind === 'search')
 const isTool = computed(() => props.message.kind === 'tool')
 const html = computed(() => renderMarkdown(props.message.content))
 const isThinking = computed(
-  () => props.message.streaming === true && props.message.content.trim().length === 0,
+  () => props.message.streaming === true && props.message.content.trim().length === 0 && !props.message.reasoning,
 )
 const isChoiceQuestion = computed(() => {
   const type = props.question?.type
@@ -160,6 +160,10 @@ function badgeStyle(letter: string) {
     </div>
 
     <div class="max-w-[85%] sm:max-w-[76%] min-w-0">
+      <details v-if="!isUser && message.reasoning" class="mb-2 rounded-2xl px-4 py-3 text-sm" :open="message.streaming && !message.content" style="background-color: rgb(var(--md-surface-container-low)); color: rgb(var(--md-on-surface-variant))">
+        <summary class="cursor-pointer select-none text-xs font-semibold">{{ message.streaming && !message.content ? '正在思考…' : '思考过程' }}</summary>
+        <div class="whitespace-pre-wrap break-words mt-3 leading-relaxed text-xs">{{ message.reasoning }}</div>
+      </details>
       <div
         v-if="isThinking"
         class="px-4 py-3 rounded-2xl rounded-tl-sm text-sm animate-pulse"
@@ -172,7 +176,7 @@ function badgeStyle(letter: string) {
       </div>
 
       <div
-        v-else
+        v-else-if="message.content || isQuestion"
         class="px-4 py-3 rounded-2xl text-sm break-words"
         :class="isUser ? 'rounded-tr-sm' : 'rounded-tl-sm'"
         :style="
@@ -236,14 +240,6 @@ function badgeStyle(letter: string) {
             >
               {{ i18n.t('practiceConfirmAnswer') }}
             </button>
-
-            <p
-              v-else
-              class="text-xs text-center pt-0.5"
-              :style="{ color: 'rgb(var(--md-on-surface-variant))' }"
-            >
-              {{ i18n.t('practiceClickToSubmit') }}
-            </p>
           </div>
         </div>
         <div v-else class="learn-markdown" v-html="html" />

@@ -2,6 +2,8 @@
 import { computed, nextTick, ref, watch } from 'vue'
 import { useI18nStore } from '@/stores/i18n'
 import { isMobileDevice } from '@/utils/platform'
+import type { ReasoningEffort } from '@exameow/shared'
+import ThinkingLevelSlider from './ThinkingLevelSlider.vue'
 import { ArrowUpIcon, GlobeAltIcon, SparklesIcon, StopIcon } from '@heroicons/vue/24/outline'
 
 const props = defineProps<{
@@ -9,19 +11,21 @@ const props = defineProps<{
   awaitingAnswer: boolean
   disabled?: boolean
   searchEnabled?: boolean
-  thinkingEnabled?: boolean
+  thinkingLevel?: ReasoningEffort | null
 }>()
 
 const emit = defineEmits<{
   (e: 'send', text: string): void
   (e: 'stop'): void
   (e: 'toggle-search'): void
-  (e: 'toggle-thinking'): void
+  (e: 'update:thinkingLevel', value: ReasoningEffort | null): void
 }>()
 
 const i18n = useI18nStore()
 const text = ref('')
 const inputEl = ref<HTMLTextAreaElement | null>(null)
+const showThinkingSlider = ref(false)
+const thinkingLabel = computed(() => ({ none: '关闭', minimal: '极低', low: '低', medium: '中', high: '高', xhigh: '极高', max: '最大' })[props.thinkingLevel ?? 'none'])
 
 const placeholder = computed(() =>
   props.awaitingAnswer ? i18n.t('learnPlaceholderAnswer') : i18n.t('learnPlaceholderAsk'),
@@ -80,13 +84,13 @@ function onKeydown(e: KeyboardEvent) {
         <button
           type="button"
           class="learn-composer__toggle"
-          :class="{ 'is-on': thinkingEnabled }"
-          :aria-pressed="thinkingEnabled ? 'true' : 'false'"
+          :class="{ 'is-on': thinkingLevel && thinkingLevel !== 'none' }"
+          :aria-expanded="showThinkingSlider"
           :title="i18n.t('learnDeepThinking')"
-          @click="emit('toggle-thinking')"
+          @click="showThinkingSlider = !showThinkingSlider"
         >
           <SparklesIcon class="w-4 h-4" />
-          <span>{{ i18n.t('learnDeepThinking') }}</span>
+          <span>{{ i18n.t('learnDeepThinking') }} · {{ thinkingLevel ? thinkingLabel : '默认' }}</span>
         </button>
         <button
           type="button"
@@ -123,6 +127,9 @@ function onKeydown(e: KeyboardEvent) {
           <ArrowUpIcon class="w-5 h-5" />
         </button>
       </div>
+    </div>
+    <div v-if="showThinkingSlider" class="px-2 pt-3 pb-1 border-t mt-2" style="border-color: rgb(var(--md-outline-variant) / 0.5)">
+      <ThinkingLevelSlider :model-value="thinkingLevel ?? null" :disabled="disabled || streaming" @update:model-value="emit('update:thinkingLevel', $event)" />
     </div>
   </div>
 </template>
@@ -290,8 +297,10 @@ function onKeydown(e: KeyboardEvent) {
   }
   .learn-composer__toggle {
     height: 30px;
-    padding: 0 10px;
+    padding: 0 8px;
+    gap: 4px;
     font-size: 12px;
   }
+  .learn-composer__toggles { gap: 4px; }
 }
 </style>
